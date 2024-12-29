@@ -97,16 +97,18 @@ export const SummaryButton: React.FC = () => {
         throw new Error("Could not extract subtitles from this video");
       }
 
-      if (!selectedProvider || !apiKey) {
-        throw new Error(
-          "Please configure your API key and provider in settings"
-        );
+      if (!selectedProvider) {
+        throw new Error("Please select an AI provider in settings");
+      }
+
+      if (!selectedProvider.isLocal && !apiKey) {
+        throw new Error("Please configure your API key in settings");
       }
 
       const providerWithModel = {
         ...selectedProvider,
         model: selectedModel || selectedProvider.model,
-        apiKey,
+        apiKey: apiKey || "",
       };
 
       for await (const token of generateSummary(subtitles, providerWithModel)) {
@@ -159,10 +161,14 @@ export const SummaryButton: React.FC = () => {
       <div className="button-container">
         <button
           onClick={handleSummarize}
-          disabled={isLoading || !selectedProvider || !apiKey}
+          disabled={
+            isLoading ||
+            !selectedProvider ||
+            (!selectedProvider.isLocal && !apiKey)
+          }
           className="summarize-button"
         >
-          {isLoading ? "Summarizing..." : "Summarize Video"}
+          {isLoading ? "Summarizing..." : "Summarize"}
         </button>
         <button
           onClick={() => setShowSettings(true)}

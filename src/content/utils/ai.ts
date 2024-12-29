@@ -1,71 +1,79 @@
 import type { AIProvider } from "../../shared/config";
+import { proxyFetch, proxyFetchStream } from "../../shared/utils/proxy";
+import { fetchGoogleAIModels } from "../../shared/utils/googleAI";
 
 interface Message {
   role: "user" | "assistant" | "system";
   content: string;
 }
 
+interface StreamResponse {
+  ok: boolean;
+  error?: string;
+  chunks?: Array<{
+    choices?: Array<{
+      delta?: {
+        content?: string;
+      };
+    }>;
+  }>;
+}
+
+export interface AIModel {
+  id: string;
+  name?: string;
+}
+
+interface ModelsResponse {
+  data?: any[];
+  models?: any[];
+}
+
 async function* streamCompletion(
   provider: AIProvider,
   messages: Message[]
 ): AsyncGenerator<string, void, unknown> {
-  const { apiKey } = await chrome.storage.sync.get(["apiKey"]);
-  if (!apiKey) {
+  const { apiKey, selectedModel } = await chrome.storage.sync.get([
+    "apiKey",
+    "selectedModel",
+  ]);
+
+  if (!apiKey && !provider.isLocal) {
     throw new Error(
       "API key not found. Please set your API key in the extension settings."
     );
   }
 
   const requestBody = {
-    model: provider.model,
+    model: selectedModel || provider.model,
     messages,
     stream: true,
   };
 
-  const response = await fetch(`${provider.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(`API Error: ${error.error?.message || "Unknown error"}`);
+  // Only add Authorization header if API key is provided
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
   }
 
-  if (!response.body) {
-    throw new Error("Response body is null");
-  }
+  const baseUrl = provider.isLocal
+    ? provider.customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
+    : provider.baseUrl;
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    const chunk = decoder.decode(value);
-    const lines = chunk
-      .split("\n")
-      .filter((line) => line.trim() !== "" && line.trim() !== "data: [DONE]");
-
-    for (const line of lines) {
-      try {
-        const trimmedLine = line.replace(/^data: /, "").trim();
-        if (!trimmedLine) continue;
-
-        const parsed = JSON.parse(trimmedLine);
-        const content = parsed.choices[0]?.delta?.content || "";
-        if (content) {
-          yield content;
-        }
-      } catch (e) {
-        console.warn("Failed to parse streaming response line:", e);
-      }
+  try {
+    for await (const chunk of proxyFetchStream(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestBody),
+    })) {
+      yield chunk;
     }
+  } catch (error) {
+    console.error("Error in streamCompletion:", error);
+    throw error;
   }
 }
 
@@ -131,6 +139,47 @@ If the user asks something that isn't covered in the summary, you can say so whi
     }
   } catch (error) {
     console.error("Error answering question:", error);
+    throw error;
+  }
+}
+
+export async function fetchModels(
+  provider: AIProvider,
+  apiKey: string | null,
+  customBaseUrl?: string
+): Promise<AIModel[]> {
+  if (!provider.supportsModelList) {
+    return [];
+  }
+
+  if (provider.name === "Google AI") {
+    return fetchGoogleAIModels(apiKey || "");
+  }
+
+  const baseUrl = provider.isLocal
+    ? customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
+    : provider.baseUrl;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  // Only add Authorization header if API key is provided
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  try {
+    const response = (await proxyFetch(`${baseUrl}/models`, {
+      headers,
+    })) as ModelsResponse;
+    const models = response.data || response.models || [];
+    return models.map((m: any) => ({
+      id: m.id,
+      name: m.name || m.id,
+    }));
+  } catch (error) {
+    console.error("Error fetching models:", error);
     throw error;
   }
 }

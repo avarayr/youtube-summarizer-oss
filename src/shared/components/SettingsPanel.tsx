@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from "react";
 import type { AIProvider } from "../config";
 import { providers } from "../config";
 import { ModelSelect } from "./ModelSelect";
-import { fetchGoogleAIModels } from "../utils/googleAI";
+import { fetchModels } from "../../content/utils/ai";
 
 interface AIModel {
   id: string;
@@ -33,48 +33,19 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const [customBaseUrl, setCustomBaseUrl] = useState<string>("");
+  const [customModel, setCustomModel] = useState<string>("");
 
-  const fetchModels = useCallback(
+  const handleFetchModels = useCallback(
     async (provider: AIProvider, key: string) => {
-      console.log("Fetching models for provider:", provider.name);
+      if (!provider.supportsModelList) return;
+
       setIsLoadingModels(true);
       setModelError(null);
       try {
-        if (provider.name === "Google AI") {
-          const models = await fetchGoogleAIModels(key);
-          setAvailableModels(models);
-          if (models.length > 0) {
-            setSelectedModel(models[0].id);
-            chrome.storage.sync.set({ selectedModel: models[0].id });
-            onModelChange?.(models[0].id);
-          }
-          return;
-        }
-
-        const response = await fetch(`${provider.baseUrl}/models`, {
-          headers: {
-            Authorization: `Bearer ${key}`,
-            "Content-Type": "application/json",
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch models");
-        }
-
-        const data = await response.json();
-        console.log("Models response:", data);
-        const models = data.data || data.models || [];
-        console.log("Parsed models:", models);
-        setAvailableModels(
-          models.map((m: any) => ({
-            id: m.id,
-            name: m.name || m.id,
-          }))
-        );
-
+        const models = await fetchModels(provider, key, customBaseUrl);
+        setAvailableModels(models);
         if (models.length > 0) {
-          console.log("Setting default model:", models[0].id);
           setSelectedModel(models[0].id);
           chrome.storage.sync.set({ selectedModel: models[0].id });
           onModelChange?.(models[0].id);
@@ -91,31 +62,102 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         setIsLoadingModels(false);
       }
     },
-    [onModelChange]
+    [onModelChange, customBaseUrl]
   );
 
   // Load saved settings
   useEffect(() => {
     chrome.storage.sync.get(
-      ["apiKey", "selectedProvider", "selectedModel"],
+      [
+        "apiKey",
+        "selectedProvider",
+        "selectedModel",
+        "customBaseUrl",
+        "customModel",
+      ],
       (result) => {
         const provider = result.selectedProvider || providers[0];
         const model = result.selectedModel || provider.model;
+        const savedCustomBaseUrl = result.customBaseUrl || "";
+        const savedCustomModel = result.customModel || "";
 
         setSelectedProvider(provider);
         setApiKey(result.apiKey || null);
         setSelectedModel(model);
+        setCustomBaseUrl(savedCustomBaseUrl);
+        setCustomModel(savedCustomModel);
 
         // Notify parent components
         onProviderChange?.(provider);
         onModelChange?.(model);
 
-        if (!result.apiKey) {
+        // Only show API key error for non-local providers
+        if (!result.apiKey && !provider.isLocal) {
           setApiKeyError("Please set your API key in the extension settings");
+        }
+
+        // If it's a local provider with model list support or Google AI, try to fetch models
+        if (
+          (provider.isLocal && provider.supportsModelList) ||
+          provider.name === "Google AI"
+        ) {
+          handleFetchModels(provider, result.apiKey || "");
         }
       }
     );
-  }, [onProviderChange, onModelChange]);
+  }, [onProviderChange, onModelChange, handleFetchModels]);
+
+  const handleProviderChange = (provider: AIProvider) => {
+    setSelectedProvider(provider);
+
+    // Reset model-related state when changing providers
+    setSelectedModel(provider.model);
+    setAvailableModels([]);
+    setModelError(null);
+
+    // Clear API key error if switching to a local provider
+    if (provider.isLocal) {
+      setApiKeyError(null);
+    } else if (!apiKey) {
+      setApiKeyError("Please set your API key in the extension settings");
+    }
+
+    // Save provider and related settings
+    chrome.storage.sync.set({
+      selectedProvider: provider,
+      selectedModel: provider.model,
+    });
+
+    // Notify parent components
+    onProviderChange?.(provider);
+    onModelChange?.(provider.model);
+
+    // If the provider supports model listing, fetch models
+    // For local providers, we don't require an API key
+    if (provider.supportsModelList && (provider.isLocal || apiKey)) {
+      handleFetchModels(provider, apiKey || "");
+    }
+  };
+
+  const handleBaseUrlChange = (url: string) => {
+    setCustomBaseUrl(url);
+    chrome.storage.sync.set({ customBaseUrl: url });
+
+    // If we have a provider and API key, try to fetch models with the new base URL
+    if (selectedProvider?.supportsModelList && apiKey) {
+      handleFetchModels(selectedProvider, apiKey);
+    }
+  };
+
+  const handleCustomModelChange = (model: string) => {
+    setCustomModel(model);
+    setSelectedModel(model);
+    chrome.storage.sync.set({
+      customModel: model,
+      selectedModel: model,
+    });
+    onModelChange?.(model);
+  };
 
   return (
     <div className={`yt-summary-container ${className}`}>
@@ -146,6 +188,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 setApiKeyError("Please set your API key");
               } else {
                 setApiKeyError(null);
+                if (selectedProvider?.supportsModelList) {
+                  handleFetchModels(selectedProvider, newKey);
+                }
               }
             }}
           />
@@ -158,36 +203,59 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               className={`provider-option ${
                 selectedProvider?.name === provider.name ? "selected" : ""
               }`}
-              onClick={() => {
-                console.log("Selected provider:", provider.name);
-                setSelectedProvider(provider);
-                setSelectedModel(provider.model);
-                chrome.storage.sync.set({
-                  selectedProvider: provider,
-                  selectedModel: provider.model,
-                });
-                // Notify parent components
-                onProviderChange?.(provider);
-                onModelChange?.(provider.model);
-              }}
+              onClick={() => handleProviderChange(provider)}
             >
               {provider.name}
             </div>
           ))}
         </div>
-        {selectedProvider && availableModels.length > 0 && (
-          <ModelSelect
-            provider={selectedProvider}
-            models={availableModels}
-            selectedModel={selectedModel}
-            isLoading={isLoadingModels}
-            onChange={(modelId) => {
-              setSelectedModel(modelId);
-              chrome.storage.sync.set({ selectedModel: modelId });
-              onModelChange?.(modelId);
-            }}
-          />
+
+        {selectedProvider?.isLocal && (
+          <div className="settings-section">
+            <label htmlFor="baseUrl">Base URL</label>
+            <input
+              type="text"
+              id="baseUrl"
+              placeholder={selectedProvider.defaultBaseUrl || "Enter base URL"}
+              className="base-url-input"
+              value={customBaseUrl}
+              onChange={(e) => handleBaseUrlChange(e.target.value.trim())}
+            />
+            <div className="help-text">
+              Default: {selectedProvider.defaultBaseUrl || "None"}
+            </div>
+          </div>
         )}
+
+        {selectedProvider?.requiresModelInput ? (
+          <div className="settings-section">
+            <label htmlFor="customModel">Model Name</label>
+            <input
+              type="text"
+              id="customModel"
+              placeholder="Enter model name"
+              className="model-input"
+              value={customModel}
+              onChange={(e) => handleCustomModelChange(e.target.value.trim())}
+            />
+          </div>
+        ) : (
+          selectedProvider &&
+          availableModels.length > 0 && (
+            <ModelSelect
+              provider={selectedProvider}
+              models={availableModels}
+              selectedModel={selectedModel}
+              isLoading={isLoadingModels}
+              onChange={(modelId) => {
+                setSelectedModel(modelId);
+                chrome.storage.sync.set({ selectedModel: modelId });
+                onModelChange?.(modelId);
+              }}
+            />
+          )
+        )}
+
         {apiKeyError && <div className="error-message">{apiKeyError}</div>}
         {modelError && <div className="warning-message">{modelError}</div>}
       </div>

@@ -37,8 +37,6 @@ export async function copyStaticFiles() {
 
   // Copy static files
   await copyFile("src/static/styles/styles.css", "public/content/styles.css");
-  await copyFile("src/static/popup/index.html", "public/popup/index.html");
-  await copyFile("src/static/popup/popup.js", "public/popup/popup.js");
   await copyFile("src/static/manifest/manifest.json", "public/manifest.json");
 }
 
@@ -61,6 +59,16 @@ async function buildExtension() {
     await build({
       entrypoints: ["./src/background/index.ts"],
       outdir: "./public/background",
+      minify: !isDev,
+      define: {
+        "import.meta.env.DEV": JSON.stringify(isDev),
+      },
+    });
+
+    // Build popup
+    await build({
+      entrypoints: ["./src/popup/index.tsx"],
+      outdir: "./public/popup",
       minify: !isDev,
       define: {
         "import.meta.env.DEV": JSON.stringify(isDev),
