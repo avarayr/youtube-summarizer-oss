@@ -154,19 +154,9 @@ export async function fetchModels(
     return fetchGoogleAIModels(apiKey || "");
   }
 
-  let baseUrl = provider.isLocal
+  const baseUrl = provider.isLocal
     ? customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
     : provider.baseUrl;
-
-  // Ensure baseUrl is not empty and doesn't end with a slash
-  if (!baseUrl) {
-    throw new Error(
-      "Base URL is empty. Please configure a valid base URL in settings."
-    );
-  }
-
-  // Remove trailing slash if present
-  baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -178,12 +168,7 @@ export async function fetchModels(
   }
 
   try {
-    const endpoint = `/models`;
-    const fullUrl = baseUrl + endpoint;
-
-    console.log("Fetching models from:", fullUrl);
-
-    const response = (await proxyFetch(fullUrl, {
+    const response = (await proxyFetch(`${baseUrl}/models`, {
       headers,
     })) as ModelsResponse;
     const models = response.data || response.models || [];
