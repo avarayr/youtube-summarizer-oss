@@ -33,10 +33,8 @@ async function* streamCompletion(
   provider: AIProvider,
   messages: Message[]
 ): AsyncGenerator<string, void, unknown> {
-  const { apiKey, selectedModel } = await chrome.storage.sync.get([
-    "apiKey",
-    "selectedModel",
-  ]);
+  const { apiKey, selectedModel, customBaseUrl } =
+    await chrome.storage.sync.get(["apiKey", "selectedModel", "customBaseUrl"]);
 
   if (!apiKey && !provider.isLocal) {
     throw new Error(
@@ -60,7 +58,7 @@ async function* streamCompletion(
   }
 
   const baseUrl = provider.isLocal
-    ? provider.customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
+    ? customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
     : provider.baseUrl;
 
   try {
