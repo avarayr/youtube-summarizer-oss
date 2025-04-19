@@ -33,10 +33,8 @@ async function* streamCompletion(
   provider: AIProvider,
   messages: Message[]
 ): AsyncGenerator<string, void, unknown> {
-  const { apiKey, selectedModel } = await chrome.storage.sync.get([
-    "apiKey",
-    "selectedModel",
-  ]);
+  const { apiKey, selectedModel, customBaseUrl } =
+    await chrome.storage.sync.get(["apiKey", "selectedModel", "customBaseUrl"]);
 
   if (!apiKey && !provider.isLocal) {
     throw new Error(
@@ -60,7 +58,7 @@ async function* streamCompletion(
   }
 
   const baseUrl = provider.isLocal
-    ? provider.customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
+    ? customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
     : provider.baseUrl;
 
   try {
@@ -156,9 +154,19 @@ export async function fetchModels(
     return fetchGoogleAIModels(apiKey || "");
   }
 
-  const baseUrl = provider.isLocal
+  let baseUrl = provider.isLocal
     ? customBaseUrl || provider.defaultBaseUrl || provider.baseUrl
     : provider.baseUrl;
+
+  // Ensure baseUrl is not empty and doesn't end with a slash
+  if (!baseUrl) {
+    throw new Error(
+      "Base URL is empty. Please configure a valid base URL in settings."
+    );
+  }
+
+  // Remove trailing slash if present
+  baseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -170,7 +178,12 @@ export async function fetchModels(
   }
 
   try {
-    const response = (await proxyFetch(`${baseUrl}/models`, {
+    const endpoint = `/models`;
+    const fullUrl = baseUrl + endpoint;
+
+    console.log("Fetching models from:", fullUrl);
+
+    const response = (await proxyFetch(fullUrl, {
       headers,
     })) as ModelsResponse;
     const models = response.data || response.models || [];
